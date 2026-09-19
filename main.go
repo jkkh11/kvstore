@@ -9,29 +9,31 @@ import (
 
 func main() {
 	lo, err := net.Listen("tcp", ":6380")
-	if err != nil {
-		log.Fatal(err)
+	if err != nil {log.Fatal(err)}
 
+	for {
+		conn, err := lo.Accept()
+		if err != nil {log.Print(err); continue}
+		go rwConnection(conn)
 	}
 
-	conn, err := lo.Accept()
-	if err != nil {
-		log.Fatal(err)
-	}
+	
+}
 
+func rwConnection(conn net.Conn) {
 	defer conn.Close()
-
-	bufioReader := bufio.NewReader(conn)
-	readInputBytes, err := bufioReader.ReadBytes('\n')
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	bufioWriter := bufio.NewWriter(conn)
-	bufioWriter.Write(readInputBytes)
-	err = bufioWriter.Flush()
+	bufioReader := bufio.NewReader(conn)
 
-	if err != nil {
-		log.Fatal(err)
+	for {
+		readInputBytes, err := bufioReader.ReadBytes('\n')
+		if err != nil {log.Print(err); return}
+
+		_ , err = bufioWriter.Write(readInputBytes)
+		if err != nil {log.Print(err); return}
+		
+		err = bufioWriter.Flush()
+
+		if err != nil {log.Print(err); return}
 	}
 }
