@@ -2,9 +2,11 @@ package main
 
 import (
 	"bufio"
-	//"fmt"
+	"io"
 	"log"
 	"net"
+	"strconv"
+	"strings"
 )
 
 func main() {
@@ -29,7 +31,23 @@ func rwConnection(conn net.Conn) {
 		readInputBytes, err := bufioReader.ReadBytes('\n')
 		if err != nil {log.Print(err); return}
 
-		_ , err = bufioWriter.Write(readInputBytes)
+		readStringConversion := string(readInputBytes)
+		trimmedString := strings.TrimPrefix(readStringConversion, "$")
+		trimmedString = strings.TrimSuffix(trimmedString, "\n")
+		trimmedString = strings.TrimSuffix(trimmedString, "\r")
+
+		byteQuantity, err := strconv.Atoi(trimmedString)
+		if err != nil {log.Print(err); return}
+		
+		parsedBuffer := make([]byte, byteQuantity)
+
+		_, err = io.ReadFull(bufioReader, parsedBuffer)
+		if err != nil {log.Print(err); return}
+		
+		_, err = bufioReader.Discard(2)
+		if err != nil {log.Print(err); return}
+
+		_ , err = bufioWriter.Write(parsedBuffer)
 		if err != nil {log.Print(err); return}
 		
 		err = bufioWriter.Flush()
