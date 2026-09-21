@@ -29,29 +29,46 @@ func rwConnection(conn net.Conn) {
 
 	for {
 		readInputBytes, err := bufioReader.ReadBytes('\n')
+		if err == io.EOF {return}
 		if err != nil {log.Print(err); return}
 
 		readStringConversion := string(readInputBytes)
-		trimmedString := strings.TrimPrefix(readStringConversion, "$")
-		trimmedString = strings.TrimSuffix(trimmedString, "\n")
-		trimmedString = strings.TrimSuffix(trimmedString, "\r")
 
-		byteQuantity, err := strconv.Atoi(trimmedString)
-		if err != nil {log.Print(err); return}
-		
-		parsedBuffer := make([]byte, byteQuantity)
+		if strings.HasPrefix(readStringConversion, "*") {
+			trimmedString := strings.TrimPrefix(readStringConversion, "*")
+			trimmedString = strings.TrimSuffix(trimmedString, "\r\n")
 
-		_, err = io.ReadFull(bufioReader, parsedBuffer)
-		if err != nil {log.Print(err); return}
-		
-		_, err = bufioReader.Discard(2)
-		if err != nil {log.Print(err); return}
+			elementQuantity, err := strconv.Atoi(trimmedString)
+			if err != nil {log.Print(err); return}
 
-		_ , err = bufioWriter.Write(parsedBuffer)
-		if err != nil {log.Print(err); return}
-		
-		err = bufioWriter.Flush()
+			for i := 0; i < elementQuantity; i++ {
 
-		if err != nil {log.Print(err); return}
-	}
+				readInputBytes, err := bufioReader.ReadBytes('\n')
+				if err != nil {log.Print(err); return}
+
+				readStringConversion := string(readInputBytes)
+				
+				trimmedString = strings.TrimPrefix(readStringConversion, "$")
+				trimmedString = strings.TrimSuffix(trimmedString, "\r\n")
+
+				byteQuantity, err := strconv.Atoi(trimmedString)
+				if err != nil {log.Print(err); return}
+				
+				parsedBuffer := make([]byte, byteQuantity)
+
+				_, err = io.ReadFull(bufioReader, parsedBuffer)
+				if err != nil {log.Print(err); return}
+				
+				_, err = bufioReader.Discard(2)
+				if err != nil {log.Print(err); return}
+
+				_ , err = bufioWriter.Write(parsedBuffer)
+				if err != nil {log.Print(err); return}
+				
+				err = bufioWriter.Flush()
+
+				if err != nil {log.Print(err); return}
+			}
+		}
+	}	
 }
