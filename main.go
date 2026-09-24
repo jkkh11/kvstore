@@ -8,10 +8,16 @@ import (
 	"strconv"
 	"strings"
 	"fmt"
+	"sync"
 )
 
+type KVstore struct {
+	mutex sync.RWMutex
+	kvmap map[string]string
+}
+
 func main() {
-	kvstore := make(map[string]string)
+	r := KVstore{kvmap:make(map[string]string)}
 
 	lo, err := net.Listen("tcp", ":6380")
 	if err != nil {log.Fatal(err)}
@@ -19,13 +25,19 @@ func main() {
 	for {
 		conn, err := lo.Accept()
 		if err != nil {log.Print(err); continue}
-		go RESPParse(conn,kvstore)
+		go r.RESPParse(conn)
 	}
 
 	
 }
 
-func RESPParse(conn net.Conn, kvstore map[string]string) {
+func writeResponse(writer *bufio.Writer, response string) error {
+	_,err := writer.Write([]byte(response))
+	if err != nil {return err}
+	return writer.Flush()
+}
+
+func (r *KVstore) RESPParse(conn net.Conn) {
 	defer conn.Close()
 	bufioWriter := bufio.NewWriter(conn)
 	bufioReader := bufio.NewReader(conn)
@@ -44,6 +56,12 @@ func RESPParse(conn net.Conn, kvstore map[string]string) {
 			elementQuantity, err := strconv.Atoi(trimmedString)
 			if err != nil {log.Print(err); return}
 
+			if elementQuantity < 0 {
+				if err = writeResponse(bufioWriter,"-ERR invalid array length\r\n"); err != nil {
+					log.Print(err)
+				}
+				return
+			}
 			commandStore := make([]string, elementQuantity)
 
 			for i := 0; i < elementQuantity; i++ {
@@ -53,12 +71,27 @@ func RESPParse(conn net.Conn, kvstore map[string]string) {
 
 				readStringConversion := string(readInputBytes)
 				
+				if !strings.HasPrefix(readStringConversion,"$") {
+					if err = writeResponse(bufioWriter,"-ERR expected bulk string\r\n"); err != nil {
+						log.Print(err)
+					}
+					return
+			}
+
 				trimmedString = strings.TrimPrefix(readStringConversion, "$")
 				trimmedString = strings.TrimSuffix(trimmedString, "\r\n")
 
 				byteQuantity, err := strconv.Atoi(trimmedString)
 				if err != nil {log.Print(err); return}
 				
+				if byteQuantity < 0 {
+					if err = writeResponse(bufioWriter,"-ERR invalid bulk string length\r\n"); err != nil {
+					log.Print(err)
+					}
+				return
+				}
+			
+
 				parsedBuffer := make([]byte, byteQuantity)
 
 				_, err = io.ReadFull(bufioReader, parsedBuffer)
@@ -72,19 +105,20 @@ func RESPParse(conn net.Conn, kvstore map[string]string) {
 				commandStore[i] = string(parsedBuffer)
 			}
 			
-			//fmt.Print(len(commandStore))
-			dispatchReturn := runDispatcher(commandStore,kvstore)
+			dispatchReturn := r.runDispatcher(commandStore)
 
-			_ , err = bufioWriter.Write([]byte(dispatchReturn))
-			if err != nil {log.Print(err); return}
-			err = bufioWriter.Flush()
+			err = writeResponse(bufioWriter, dispatchReturn)
 			if err != nil {log.Print(err); return}
 
 		}
+
 	}	
 }
 
-func runDispatcher(commands []string, kvstore map[string]string) string {
+func (r *KVstore) runDispatcher(commands []string) string {
+	
+	
+	
 	if len(commands) == 0 {
 		return "-ERR no command ...\r\n"
 	}
@@ -94,8 +128,13 @@ func runDispatcher(commands []string, kvstore map[string]string) string {
 		if len(commands) != 3 {
 			return "-ERR wrong number of arguments for 'set' command\r\n"
 		}
-		kvstore[commands[1]] = commands[2]
+		
+		r.mutex.Lock()
+		defer r.mutex.Unlock()
+
+		r.kvmap[commands[1]] = commands[2]
 		return "+OK\r\n"
+
 	case "PING":
 		if len(commands) > 2 {
 			return "-ERR wrong number of arguments for 'ping' command\r\n"
@@ -105,10 +144,15 @@ func runDispatcher(commands []string, kvstore map[string]string) string {
 		}
 		return "+PONG\r\n"
 	case "GET":
+		
 		if len(commands) != 2 {
 			return "-ERR wrong number of arguments for 'get' command\r\n"
 		}
-		value, exists := kvstore[commands[1]]
+
+		r.mutex.RLock()
+		defer r.mutex.RUnlock()
+
+		value, exists := r.kvmap[commands[1]]
 		if !exists {
 			return "$-1\r\n"
 		}
@@ -118,11 +162,15 @@ func runDispatcher(commands []string, kvstore map[string]string) string {
 		if len(commands) != 2 {
 			return "-ERR wrong number of arguments for 'del' command\r\n"
 		}
-		value := kvstore[commands[1]]
-		if value == "" {
+
+		r.mutex.Lock()
+		defer r.mutex.Unlock()
+
+		_, exists := r.kvmap[commands[1]]
+		if !exists {
 			return ":0\r\n"
 		}
-		delete(kvstore,commands[1])
+		delete(r.kvmap,commands[1])
 		return ":1\r\n"
 
 	default:
