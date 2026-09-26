@@ -12,6 +12,8 @@ import (
 	"time"
 	"encoding/gob"
 	"os"
+	"os/signal"
+	"syscall"
 )
 
 type KVstore struct {
@@ -29,15 +31,27 @@ func main() {
 
 	lo, err := net.Listen("tcp", ":6380")
 	if err != nil {log.Fatal(err)}
+	defer lo.Close()
 	r.loadMap()
 	go r.intervalSnapshot()
-	for {
-		conn, err := lo.Accept()
-		if err != nil {log.Print(err); continue}
-		go r.RESPParse(conn)
-		
-	}
+
+	signalChannel := make(chan os.Signal, 1)
+	signal.Notify(signalChannel, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		for {
+			conn, err := lo.Accept()
+			if err != nil {log.Print(err); continue}
+			go r.RESPParse(conn)
+			
+		}
+	}()
+	<-signalChannel
+	r.saveMap()
+	fmt.Println("Exiting Program")
 }
+
+
 
 func (r *KVstore) saveMap() {
 	r.mutex.RLock()
