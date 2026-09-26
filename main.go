@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"encoding/gob"
+	"os"
 )
 
 type KVstore struct {
@@ -18,8 +20,8 @@ type KVstore struct {
 }
 
 type valueWithExpiry struct {
-	expiry time.Time
-	kvString string
+	Expiry time.Time
+	KvString string
 }
 
 func main() {
@@ -27,14 +29,48 @@ func main() {
 
 	lo, err := net.Listen("tcp", ":6380")
 	if err != nil {log.Fatal(err)}
-
+	r.loadMap()
+	go r.intervalSnapshot()
 	for {
 		conn, err := lo.Accept()
 		if err != nil {log.Print(err); continue}
 		go r.RESPParse(conn)
+		
 	}
+}
 
-	
+func (r *KVstore) saveMap() {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	KVfile, err := os.Create("Map")
+	if err != nil {log.Print(err); return}
+	defer KVfile.Close()
+	encoder := gob.NewEncoder(KVfile)
+	err = encoder.Encode(r.kvmap)
+	if err != nil {log.Print(err); return}
+}
+
+func (r *KVstore) loadMap() {
+	KVfile, err := os.Open("Map")
+	if os.IsNotExist(err) {
+		return
+	}
+	if err != nil {log.Print(err); return}
+	defer KVfile.Close()
+
+	decoder := gob.NewDecoder(KVfile)
+	err = decoder.Decode(&r.kvmap)
+	if err != nil {log.Print(err); return}
+
+}
+
+func (r *KVstore) intervalSnapshot() {
+	const tickSpeed = 10
+	ticker := time.NewTicker(time.Duration(tickSpeed) * time.Second)
+	for range ticker.C {
+		r.saveMap()
+	}
 }
 
 func writeResponse(writer *bufio.Writer, response string) error {
@@ -138,9 +174,9 @@ func (r *KVstore) getLive(key string) (string, bool) {
 		return "", false
 	}
 
-	if value.expiry.IsZero() || !time.Now().After(value.expiry) {
+	if value.Expiry.IsZero() || !time.Now().After(value.Expiry) {
 		r.mutex.RUnlock()
-		return value.kvString, true
+		return value.KvString, true
 	}
 
 	r.mutex.RUnlock()
@@ -152,8 +188,8 @@ func (r *KVstore) getLive(key string) (string, bool) {
 		return "", false
 	}
 
-	if value.expiry.IsZero() || !time.Now().After(value.expiry) {
-		return value.kvString, true
+	if value.Expiry.IsZero() || !time.Now().After(value.Expiry) {
+		return value.KvString, true
 	}
 
 	delete(r.kvmap, key)
@@ -178,7 +214,7 @@ func (r *KVstore) runDispatcher(commands []string) string {
 		r.mutex.Lock()
 		defer r.mutex.Unlock()
 
-		r.kvmap[commands[1]] = valueWithExpiry{kvString: commands[2]}
+		r.kvmap[commands[1]] = valueWithExpiry{KvString: commands[2]}
 		return "+OK\r\n"
 
 	case "PING":
@@ -229,12 +265,12 @@ func (r *KVstore) runDispatcher(commands []string) string {
 			return ":0\r\n"
 		}
 
-		previousValue := value.kvString
+		previousValue := value.KvString
 		
 		expiryTime, err := strconv.Atoi(commands[2])
 		if err != nil {log.Print(err); return "-ERR\r\n"}
 
-		r.kvmap[commands[1]] = valueWithExpiry{kvString: previousValue, expiry: time.Now().Add(time.Duration(expiryTime) * time.Second)}
+		r.kvmap[commands[1]] = valueWithExpiry{KvString: previousValue, Expiry: time.Now().Add(time.Duration(expiryTime) * time.Second)}
 		return ":1\r\n"
 
 	default:
