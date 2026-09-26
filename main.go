@@ -2,22 +2,28 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"strconv"
 	"strings"
-	"fmt"
 	"sync"
+	"time"
 )
 
 type KVstore struct {
 	mutex sync.RWMutex
-	kvmap map[string]string
+	kvmap map[string]valueWithExpiry
+}
+
+type valueWithExpiry struct {
+	expiry time.Time
+	kvString string
 }
 
 func main() {
-	r := KVstore{kvmap:make(map[string]string)}
+	r := KVstore{kvmap:make(map[string]valueWithExpiry)}
 
 	lo, err := net.Listen("tcp", ":6380")
 	if err != nil {log.Fatal(err)}
@@ -84,7 +90,8 @@ func (r *KVstore) RESPParse(conn net.Conn) {
 				byteQuantity, err := strconv.Atoi(trimmedString)
 				if err != nil {log.Print(err); return}
 				
-				if byteQuantity < 0 {
+				const maxBulkStringSize = 512 * 1024 * 1024
+				if byteQuantity < 0 || byteQuantity > maxBulkStringSize {
 					if err = writeResponse(bufioWriter,"-ERR invalid bulk string length\r\n"); err != nil {
 					log.Print(err)
 					}
@@ -110,9 +117,48 @@ func (r *KVstore) RESPParse(conn net.Conn) {
 			err = writeResponse(bufioWriter, dispatchReturn)
 			if err != nil {log.Print(err); return}
 
+		} else {
+			err = writeResponse(bufioWriter, "-ERR invalid bulk string syntax\r\n")
+		 	if err != nil {log.Print(err)}
+			return
 		}
-
+ 
+		
+		 
 	}	
+}
+
+func (r *KVstore) getLive(key string) (string, bool) {
+	r.mutex.RLock()
+	
+
+	value, exists := r.kvmap[key]
+	if !exists {
+		r.mutex.RUnlock()
+		return "", false
+	}
+
+	if value.expiry.IsZero() || !time.Now().After(value.expiry) {
+		r.mutex.RUnlock()
+		return value.kvString, true
+	}
+
+	r.mutex.RUnlock()
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	value, exists = r.kvmap[key]
+	if !exists {
+		return "", false
+	}
+
+	if value.expiry.IsZero() || !time.Now().After(value.expiry) {
+		return value.kvString, true
+	}
+
+	delete(r.kvmap, key)
+	return "", false
+
 }
 
 func (r *KVstore) runDispatcher(commands []string) string {
@@ -132,7 +178,7 @@ func (r *KVstore) runDispatcher(commands []string) string {
 		r.mutex.Lock()
 		defer r.mutex.Unlock()
 
-		r.kvmap[commands[1]] = commands[2]
+		r.kvmap[commands[1]] = valueWithExpiry{kvString: commands[2]}
 		return "+OK\r\n"
 
 	case "PING":
@@ -149,10 +195,7 @@ func (r *KVstore) runDispatcher(commands []string) string {
 			return "-ERR wrong number of arguments for 'get' command\r\n"
 		}
 
-		r.mutex.RLock()
-		defer r.mutex.RUnlock()
-
-		value, exists := r.kvmap[commands[1]]
+		value, exists := r.getLive(commands[1])
 		if !exists {
 			return "$-1\r\n"
 		}
@@ -171,6 +214,27 @@ func (r *KVstore) runDispatcher(commands []string) string {
 			return ":0\r\n"
 		}
 		delete(r.kvmap,commands[1])
+		return ":1\r\n"
+
+	case "EXPIRE":
+		if len(commands) != 3 {
+			return "-ERR wrong number of arguments for 'expire' command\r\n"
+		}
+
+		r.mutex.Lock()
+		defer r.mutex.Unlock()
+
+		value, exists := r.kvmap[commands[1]]
+		if !exists {
+			return ":0\r\n"
+		}
+
+		previousValue := value.kvString
+		
+		expiryTime, err := strconv.Atoi(commands[2])
+		if err != nil {log.Print(err); return "-ERR\r\n"}
+
+		r.kvmap[commands[1]] = valueWithExpiry{kvString: previousValue, expiry: time.Now().Add(time.Duration(expiryTime) * time.Second)}
 		return ":1\r\n"
 
 	default:

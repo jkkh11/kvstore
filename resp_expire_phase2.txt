@@ -1,0 +1,15 @@
+*2
+$3
+GET
+$11
+short_lived
+*2
+$3
+GET
+$9
+no_expiry
+*2
+$3
+DEL
+$9
+no_expiry
