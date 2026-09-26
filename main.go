@@ -282,7 +282,7 @@ func (r *KVstore) runDispatcher(commands []string) string {
 		previousValue := value.KvString
 		
 		expiryTime, err := strconv.Atoi(commands[2])
-		if err != nil {log.Print(err); return "-ERR\r\n"}
+		if err != nil {return "-ERR value is not an integer or out of range\r\n"}
 
 		r.kvmap[commands[1]] = valueWithExpiry{KvString: previousValue, Expiry: time.Now().Add(time.Duration(expiryTime) * time.Second)}
 		return ":1\r\n"
